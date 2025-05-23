@@ -1,0 +1,130 @@
+import time
+import csv
+import re
+from datetime import datetime
+from selenium import webdriver
+import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait, Select
+from selenium.webdriver.support import expected_conditions as EC
+
+def get_student_data(entry):
+    try:
+        try:
+            name = entry.find_element(By.CSS_SELECTOR, "h2.fullname, h2.fullname.mt-3").text.strip()
+            if not name:
+                return None
+        except:
+            return None
+
+        data = {
+            "name": name,
+            "email": "N/A",
+            "major": "N/A",
+            "year": "N/A",
+            "school": "N/A",
+            "phone": "N/A"
+        }
+
+        text_content = entry.get_attribute("textContent")
+
+        try:
+            data["email"] = entry.find_element(By.CSS_SELECTOR, "a[href^='mailto:']").text.strip()
+        except:
+            pass
+
+        fields = {
+            "Major": "major",
+            "Year": "year",
+            "School": "school",
+            "Phone": "phone"
+        }
+
+        for field, key in fields.items():
+            pattern = f"{field}:(.*?)(?:\\n|$)"
+            match = re.search(pattern, text_content)
+            if match:
+                data[key] = match.group(1).strip()
+
+        return data
+
+    except Exception as e:
+        print(f"Error processing entry: {str(e)}")
+        return None
+
+def scrape_students_by_letter(driver, letter):
+    print(f"\n🔍 Scraping students with letter: {letter}")
+
+    driver.get("https://www.utdallas.edu/directory/")
+    WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "dirAffil")))
+
+    Select(driver.find_element(By.ID, "dirAffil")).select_by_value("student")
+
+    search_box = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "dirSearch")))
+    search_box.clear()
+    search_box.send_keys(letter)
+
+    search_btn = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "span.sicon")))
+    driver.execute_script("arguments[0].click();", search_btn)
+
+    all_btn = WebDriverWait(driver, 10).until(
+        EC.element_to_be_clickable((By.CSS_SELECTOR, "a.allrecs[onclick*='showAllResults']"))
+    )
+    driver.execute_script("arguments[0].click();", all_btn)
+
+    WebDriverWait(driver, 20).until(
+        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".padding.bg-white, .directory-entry"))
+    )
+
+    entries = driver.find_elements(By.CSS_SELECTOR, ".padding.bg-white, .directory-entry")
+    print(f"📄 Found {len(entries)} entries for '{letter}'")
+
+    letter_data = []
+    for i, entry in enumerate(entries, 1):
+        student_data = get_student_data(entry)
+        if student_data:
+            letter_data.append(student_data)
+        if i % 10 == 0 or i == len(entries):
+            print(f"  -> Processed {i}/{len(entries)} entries")
+
+    return letter_data
+
+def scrape_all_students():
+    options = uc.ChromeOptions()
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.binary_location = r"C:\Users\MSI\OneDrive\Desktop\projects\chrome-win64\chrome.exe"
+
+    all_data = []
+    driver = None
+
+    try:
+        driver = uc.Chrome(options=options, version_main=133)
+        driver.implicitly_wait(5)
+
+        for letter in map(chr, range(ord('A'), ord('Z') + 1)):
+            data = scrape_students_by_letter(driver, letter)
+            all_data.extend(data)
+
+        # Save to CSV
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"utd_students_all_{timestamp}.csv"
+        with open(filename, "w", newline="", encoding="utf-8") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=["name", "email", "major", "year", "school", "phone"])
+            writer.writeheader()
+            writer.writerows(all_data)
+
+        print(f"\n✅ All Done! Total students scraped: {len(all_data)}")
+        print(f"📁 Data saved to: {filename}")
+
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
+        if driver:
+            driver.save_screenshot("error.png")
+    finally:
+        if driver:
+            driver.quit()
+            print("🧹 Browser closed.")
+
+if __name__ == "__main__":
+    scrape_all_students()
